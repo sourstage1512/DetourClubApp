@@ -1,75 +1,178 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { Link } from "expo-router";
+import { useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  FlatList,
+  ImageBackground,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput, // 1. Import TextInput
+  View,
+} from "react-native";
+import { supabase } from "../../lib/supabase";
 
-import { HelloWave } from '@/components/HelloWave';
-import ParallaxScrollView from '@/components/ParallaxScrollView';
-import { ThemedText } from '@/components/ThemedText';
-import { ThemedView } from '@/components/ThemedView';
+type City = {
+  id: number;
+  name: string;
+  country: string; // Also good to have for display or filtering
+  image_url: string | null;
+};
+
+function CityListItem({ city }: { city: City }) {
+  return (
+    <Link
+      href={{
+        pathname: "/city/[id]",
+        params: { id: city.id, name: city.name },
+      }}
+      asChild
+    >
+      <Pressable style={styles.card}>
+        <ImageBackground
+          source={{ uri: city.image_url || undefined }}
+          style={styles.image}
+          imageStyle={{ borderRadius: 10 }}
+        >
+          <View style={styles.overlay}>
+            <Text style={styles.cardText}>{city.name}</Text>
+            <Text style={styles.cardSubText}>{city.country}</Text>
+          </View>
+        </ImageBackground>
+      </Pressable>
+    </Link>
+  );
+}
 
 export default function HomeScreen() {
+  const [allCities, setAllCities] = useState<City[]>([]);
+  const [loading, setLoading] = useState(true);
+  // 2. Add state for the search query
+  const [searchQuery, setSearchQuery] = useState("");
+
+  useEffect(() => {
+    const fetchCities = async () => {
+      setLoading(true);
+      // Let's also select the 'country' field
+      const { data, error } = await supabase
+        .from("cities")
+        .select("id, name, country, image_url");
+
+      if (error) {
+        console.error(error);
+      } else {
+        setAllCities(data);
+      }
+      setLoading(false);
+    };
+
+    fetchCities();
+  }, []);
+
+  // 3. Filter cities based on the search query
+  const filteredCities = useMemo(() => {
+    if (!searchQuery) {
+      return allCities;
+    }
+    return allCities.filter((city) =>
+      city.name.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [allCities, searchQuery]);
+
+  if (loading) {
+    return <ActivityIndicator size="large" style={styles.loader} />;
+  }
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+    <View style={styles.container}>
+      <Text style={styles.header}>Where to next?</Text>
+
+      {/* 4. Add the TextInput for the search bar */}
+      <TextInput
+        style={styles.searchInput}
+        placeholder="Search by city name..."
+        value={searchQuery}
+        onChangeText={setSearchQuery}
+        placeholderTextColor="#888"
+      />
+
+      {/* 5. Update FlatList to use 'filteredCities' */}
+      <FlatList
+        data={filteredCities}
+        keyExtractor={(item) => item.id.toString()}
+        renderItem={({ item }) => <CityListItem city={item} />}
+        contentContainerStyle={{ paddingHorizontal: 16 }}
+        ListEmptyComponent={() => (
+          <Text style={styles.emptyText}>No cities found.</Text>
+        )}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  container: {
+    flex: 1,
+    paddingTop: 50,
+    backgroundColor: "#f8f8f8",
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  loader: {
+    flex: 1,
+    justifyContent: "center",
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  header: {
+    fontSize: 28,
+    fontWeight: "bold",
+    paddingHorizontal: 16,
+    marginBottom: 10, // Reduced margin
+  },
+  // New style for the search input
+  searchInput: {
+    height: 50,
+    borderColor: "#E0E0E0",
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 15,
+    marginHorizontal: 16,
+    marginBottom: 20,
+    backgroundColor: "white",
+    fontSize: 16,
+  },
+  card: {
+    height: 150,
+    marginVertical: 8,
+    borderRadius: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3.84,
+    elevation: 3,
+  },
+  image: {
+    flex: 1,
+    justifyContent: "flex-end", // Aligns content to the bottom
+  },
+  overlay: {
+    backgroundColor: "rgba(0,0,0,0.4)",
+    borderBottomLeftRadius: 10,
+    borderBottomRightRadius: 10,
+    padding: 12,
+  },
+  cardText: {
+    fontSize: 22,
+    fontWeight: "600",
+    color: "white",
+  },
+  // New style for the country subtext
+  cardSubText: {
+    fontSize: 14,
+    color: "white",
+    opacity: 0.9,
+  },
+  emptyText: {
+    textAlign: "center",
+    marginTop: 40,
+    fontSize: 16,
+    color: "#666",
   },
 });
