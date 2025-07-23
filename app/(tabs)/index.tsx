@@ -7,7 +7,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput, // 1. Import TextInput
+  TextInput,
   View,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
@@ -15,7 +15,7 @@ import { supabase } from "../../lib/supabase";
 type City = {
   id: number;
   name: string;
-  country: string; // Also good to have for display or filtering
+  country: string;
   image_url: string | null;
 };
 
@@ -47,13 +47,11 @@ function CityListItem({ city }: { city: City }) {
 export default function HomeScreen() {
   const [allCities, setAllCities] = useState<City[]>([]);
   const [loading, setLoading] = useState(true);
-  // 2. Add state for the search query
   const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     const fetchCities = async () => {
       setLoading(true);
-      // Let's also select the 'country' field
       const { data, error } = await supabase
         .from("cities")
         .select("id, name, country, image_url");
@@ -69,7 +67,6 @@ export default function HomeScreen() {
     fetchCities();
   }, []);
 
-  // 3. Filter cities based on the search query
   const filteredCities = useMemo(() => {
     if (!searchQuery) {
       return allCities;
@@ -87,16 +84,14 @@ export default function HomeScreen() {
     <View style={styles.container}>
       <Text style={styles.header}>Where to next?</Text>
 
-      {/* 4. Add the TextInput for the search bar */}
       <TextInput
         style={styles.searchInput}
         placeholder="Search by city name..."
         value={searchQuery}
         onChangeText={setSearchQuery}
-        placeholderTextColor="#888"
+        placeholderTextColor="#888" // The fix is here
       />
 
-      {/* 5. Update FlatList to use 'filteredCities' */}
       <FlatList
         data={filteredCities}
         keyExtractor={(item) => item.id.toString()}
@@ -124,9 +119,8 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: "bold",
     paddingHorizontal: 16,
-    marginBottom: 10, // Reduced margin
+    marginBottom: 10,
   },
-  // New style for the search input
   searchInput: {
     height: 50,
     borderColor: "#E0E0E0",
@@ -150,7 +144,7 @@ const styles = StyleSheet.create({
   },
   image: {
     flex: 1,
-    justifyContent: "flex-end", // Aligns content to the bottom
+    justifyContent: "flex-end",
   },
   overlay: {
     backgroundColor: "rgba(0,0,0,0.4)",
@@ -163,7 +157,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "white",
   },
-  // New style for the country subtext
   cardSubText: {
     fontSize: 14,
     color: "white",

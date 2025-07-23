@@ -212,7 +212,7 @@ const styles = StyleSheet.create({
   },
   // New style for grid item spacing
   gridItemContainer: {
-    flex: 1,
+    width: "50%", // This forces a fixed width for each item
     padding: 8,
   },
 });

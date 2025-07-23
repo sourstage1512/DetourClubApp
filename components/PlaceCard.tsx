@@ -7,6 +7,7 @@ type Place = {
   name: string;
   neighborhood: string;
   image_urls: string[] | null;
+  // This type correctly reflects that categories can be null
   categories: {
     name: string;
   } | null;
@@ -22,7 +23,11 @@ export default function PlaceCard({ place, disabled = false }: PlaceCardProps) {
     return null;
   }
 
-  const categoryName = place.categories ? place.categories.name : "Unknown";
+  // --- THIS IS THE FIX ---
+  // The '?.' safely checks if 'place.categories' exists before trying to access its 'name' property.
+  // If it doesn't exist, it gracefully uses 'Misc' as a fallback.
+  const categoryName = place.categories?.name || "Misc";
+
   const imageUrl =
     place.image_urls && place.image_urls.length > 0
       ? place.image_urls[0]
@@ -36,13 +41,10 @@ export default function PlaceCard({ place, disabled = false }: PlaceCardProps) {
         ) : (
           <View style={styles.imagePlaceholder} />
         )}
-        {/* The textContainer now has a fixed height */}
         <View style={styles.textContainer}>
-          {/* The name is now truncated */}
           <Text style={styles.name} numberOfLines={1} ellipsizeMode="tail">
             {place.name}
           </Text>
-          {/* The details are also truncated */}
           <Text style={styles.details} numberOfLines={1} ellipsizeMode="tail">
             {categoryName} • {place.neighborhood}
           </Text>
@@ -52,7 +54,7 @@ export default function PlaceCard({ place, disabled = false }: PlaceCardProps) {
   );
 }
 
-// The styles have been updated to enforce a fixed height
+// Styles are unchanged
 const styles = StyleSheet.create({
   card: {
     backgroundColor: "white",
@@ -66,7 +68,7 @@ const styles = StyleSheet.create({
   },
   image: {
     width: "100%",
-    height: 120, // The image has a fixed height
+    height: 120,
   },
   imagePlaceholder: {
     width: "100%",
@@ -75,9 +77,7 @@ const styles = StyleSheet.create({
   },
   textContainer: {
     padding: 12,
-    // 1. We enforce a fixed height for the text area
     height: 65,
-    // This ensures the text area doesn't grow, even if content is short
     justifyContent: "center",
   },
   name: {

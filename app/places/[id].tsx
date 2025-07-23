@@ -1,15 +1,16 @@
+import { Ionicons } from "@expo/vector-icons";
 import { Session } from "@supabase/supabase-js";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Button,
   FlatList,
   Linking,
   Modal,
   Pressable,
   StyleSheet,
   Text,
+  TouchableOpacity, // Correctly imported
   View,
 } from "react-native";
 import Animated, {
@@ -21,7 +22,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { supabase } from "../../lib/supabase";
 
-// Define the types we'll need for this screen
+// Type definitions
 type Place = {
   id: number;
   name: string;
@@ -34,11 +35,7 @@ type Place = {
   image_urls: string[] | null;
   tags: { id: number; name: string }[] | null;
 };
-
-type UserList = {
-  id: number;
-  name: string;
-};
+type UserList = { id: number; name: string };
 
 const IMG_HEIGHT = 300;
 
@@ -46,22 +43,20 @@ export default function PlaceDetailScreen() {
   const { id } = useLocalSearchParams();
   const [place, setPlace] = useState<Place | null>(null);
   const [loading, setLoading] = useState(true);
-
-  // --- State for User Authentication & Lists ---
   const [session, setSession] = useState<Session | null>(null);
   const [userLists, setUserLists] = useState<UserList[]>([]);
   const [isModalVisible, setModalVisible] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState("");
-
-  // --- Animation Setup ---
   const scrollRef = useAnimatedRef<Animated.ScrollView>();
   const scrollY = useSharedValue(0);
+
   const scrollHandler = useAnimatedScrollHandler({
     onScroll: (event) => {
       scrollY.value = event.contentOffset.y;
     },
   });
+
   const imageAnimatedStyle = useAnimatedStyle(() => {
     return {
       transform: [
@@ -83,7 +78,6 @@ export default function PlaceDetailScreen() {
     };
   });
 
-  // --- Data Fetching ---
   useEffect(() => {
     const numericId = id && !Array.isArray(id) ? parseInt(id, 10) : null;
     if (!numericId) return;
@@ -97,7 +91,6 @@ export default function PlaceDetailScreen() {
       if (error) console.error("Error fetching place:", error);
       else setPlace(data);
     };
-
     const fetchUserAndLists = async () => {
       const {
         data: { session },
@@ -118,41 +111,31 @@ export default function PlaceDetailScreen() {
       await Promise.all([fetchPlaceDetails(), fetchUserAndLists()]);
       setLoading(false);
     };
-
     loadData();
   }, [id]);
 
-  // --- THIS IS THE UPDATED FUNCTION ---
   const handleAddToList = async (listId: number) => {
     if (!place || isSaving) return;
     setIsSaving(true);
-
     const { error } = await supabase
       .from("list_places")
       .insert({ list_id: listId, place_id: place.id });
-
-    // Check for the specific 'duplicate key' error from the database
     if (error && error.code === "23505") {
       setFeedbackMessage("This place is already in the list.");
     } else if (error) {
-      // Handle other potential errors
       setFeedbackMessage("Error: Could not add to list.");
       console.error(error);
     } else {
-      // Handle success
       setFeedbackMessage(`Added to list successfully!`);
     }
-
     setIsSaving(false);
     setModalVisible(false);
-
     setTimeout(() => setFeedbackMessage(""), 3000);
   };
 
   if (loading) {
     return <ActivityIndicator size="large" style={styles.loader} />;
   }
-
   if (!place) {
     return (
       <View style={styles.container}>
@@ -174,31 +157,33 @@ export default function PlaceDetailScreen() {
         visible={isModalVisible}
         onRequestClose={() => setModalVisible(false)}
       >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalView}>
-            <Text style={styles.modalTitle}>Add to which list?</Text>
+        <Pressable
+          style={styles.modalContainer}
+          onPress={() => setModalVisible(false)}
+        >
+          <Pressable style={styles.modalView}>
+            <Text style={styles.modalTitle}>Add to a list</Text>
             <FlatList
               data={userLists}
               keyExtractor={(item) => item.id.toString()}
+              style={{ width: "100%" }}
               renderItem={({ item }) => (
-                <Pressable
+                <TouchableOpacity
                   style={styles.listItem}
                   onPress={() => handleAddToList(item.id)}
                 >
+                  <Ionicons name="list-outline" size={24} color="#555" />
                   <Text style={styles.listItemText}>{item.name}</Text>
-                </Pressable>
+                </TouchableOpacity>
               )}
               ListEmptyComponent={
-                <Text>You have not created any lists yet.</Text>
+                <Text style={styles.emptyListText}>
+                  You have not created any lists yet.
+                </Text>
               }
             />
-            <Button
-              title="Cancel"
-              onPress={() => setModalVisible(false)}
-              color="gray"
-            />
-          </View>
-        </View>
+          </Pressable>
+        </Pressable>
       </Modal>
 
       <Stack.Screen
@@ -227,7 +212,6 @@ export default function PlaceDetailScreen() {
             </View>
           )}
         </Animated.View>
-
         <View style={styles.contentContainer}>
           <Text style={styles.title}>{place.name}</Text>
           <Text style={styles.details}>Neighborhood: {place.neighborhood}</Text>
@@ -244,7 +228,6 @@ export default function PlaceDetailScreen() {
               </Text>
             ))}
           </View>
-
           {session && (
             <Pressable
               style={styles.addToListButton}
@@ -253,11 +236,9 @@ export default function PlaceDetailScreen() {
               <Text style={styles.addToListButtonText}>+ Add to List</Text>
             </Pressable>
           )}
-
           {feedbackMessage ? (
             <Text style={styles.feedbackText}>{feedbackMessage}</Text>
           ) : null}
-
           <Text style={styles.description}>{place.description}</Text>
           {place.notes && (
             <Text style={styles.notes}>💡 Note: {place.notes}</Text>
@@ -273,7 +254,6 @@ export default function PlaceDetailScreen() {
   );
 }
 
-// All styles, including new ones for the modal and button
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff" },
   loader: { flex: 1, justifyContent: "center" },
@@ -340,35 +320,35 @@ const styles = StyleSheet.create({
     marginTop: 20,
     textAlign: "center",
   },
-  // Modal Styles
   modalContainer: {
     flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
+    justifyContent: "flex-end",
     backgroundColor: "rgba(0, 0, 0, 0.5)",
   },
   modalView: {
-    width: "90%",
-    maxHeight: "80%",
+    width: "100%",
     backgroundColor: "white",
-    borderRadius: 20,
-    padding: 20,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 20,
+    paddingBottom: 40,
+    paddingHorizontal: 20,
+    alignItems: "center",
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 5,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    marginBottom: 20,
-    textAlign: "center",
-  },
+  modalTitle: { fontSize: 20, fontWeight: "bold", marginBottom: 25 },
   listItem: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
     paddingVertical: 15,
     borderBottomWidth: 1,
     borderBottomColor: "#eee",
   },
-  listItemText: { fontSize: 18, textAlign: "center" },
+  listItemText: { fontSize: 18, marginLeft: 15 },
+  emptyListText: { textAlign: "center", color: "#888", marginVertical: 20 },
 });
