@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   ScrollView,
   StyleSheet,
   Switch,
@@ -17,6 +18,7 @@ import { supabase } from "../../lib/supabase";
 
 // Type Definitions
 type Category = { id: number; name: string };
+type City = { id: number; name: string };
 type Budget = "Budget" | "Balanced" | "Luxury";
 type GroupType = "Solo" | "Couple" | "Group" | "Family";
 type Diet = "Any" | "Vegetarian" | "Vegan" | "Gluten-Free";
@@ -41,6 +43,9 @@ export default function AiDiscoveryScreen() {
 
   // State for all filters
   const [categories, setCategories] = useState<Category[]>([]);
+  const [cities, setCities] = useState<City[]>([]);
+  const [selectedCity, setSelectedCity] = useState<City | null>(null);
+  const [isCityModalVisible, setCityModalVisible] = useState(false);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedBudget, setSelectedBudget] = useState<Budget | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<GroupType | null>(null);
@@ -71,12 +76,16 @@ export default function AiDiscoveryScreen() {
         const categoriesPromise = supabase
           .from("categories")
           .select("id, name");
-        const [creditsResult, categoriesResult] = await Promise.all([
-          creditsPromise,
-          categoriesPromise,
-        ]);
+        const citiesPromise = supabase
+          .from("cities")
+          .select("id, name")
+          .order("name", { ascending: true });
+
+        const [creditsResult, categoriesResult, citiesResult] =
+          await Promise.all([creditsPromise, categoriesPromise, citiesPromise]);
         if (creditsResult.data) setAiCredits(creditsResult.data.ai_credits);
         if (categoriesResult.data) setCategories(categoriesResult.data);
+        if (citiesResult.data) setCities(citiesResult.data);
         setLoadingCredits(false);
       } else {
         setAiCredits(0);
@@ -95,6 +104,11 @@ export default function AiDiscoveryScreen() {
   };
 
   const handleGenerate = async () => {
+    if (!selectedCity) {
+      Alert.alert("Please select a city before generating suggestions.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
@@ -124,7 +138,7 @@ export default function AiDiscoveryScreen() {
 
     try {
       const { data, error } = await supabase.functions.invoke("ai-discovery", {
-        body: { queryText: finalQuery, cityId: 1 },
+        body: { queryText: finalQuery, cityId: selectedCity.id },
       });
 
       if (error) throw error;
@@ -155,6 +169,36 @@ export default function AiDiscoveryScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={isCityModalVisible}
+        onRequestClose={() => setCityModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          onPress={() => setCityModalVisible(false)}
+        >
+          <View style={styles.modalView}>
+            <Text style={styles.modalTitle}>Select a City</Text>
+            <ScrollView style={{ width: "100%" }}>
+              {cities.map((city) => (
+                <TouchableOpacity
+                  key={city.id}
+                  style={styles.modalItem}
+                  onPress={() => {
+                    setSelectedCity(city);
+                    setCityModalVisible(false);
+                  }}
+                >
+                  <Text style={styles.modalItemText}>{city.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       <View style={styles.header}>
         <Text style={styles.title}>Discovery Assistant</Text>
         {loadingCredits ? (
@@ -165,6 +209,18 @@ export default function AiDiscoveryScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContainer}>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>City</Text>
+          <TouchableOpacity
+            style={styles.dropdownButton}
+            onPress={() => setCityModalVisible(true)}
+          >
+            <Text style={styles.dropdownButtonText}>
+              {selectedCity ? selectedCity.name : "Select a City"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Place Type</Text>
           <View style={styles.pillsContainer}>
@@ -395,4 +451,43 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     paddingHorizontal: 16,
   },
+  dropdownButton: {
+    backgroundColor: "#f0f0f0",
+    padding: 15,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    marginTop: 8,
+  },
+  dropdownButtonText: {
+    fontSize: 16,
+    color: "#333",
+  },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+  },
+  modalView: {
+    width: "80%",
+    maxHeight: "60%",
+    backgroundColor: "white",
+    borderRadius: 20,
+    padding: 20,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  modalTitle: { fontSize: 20, fontWeight: "bold", marginBottom: 15 },
+  modalItem: {
+    width: "100%",
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  modalItemText: { textAlign: "center", fontSize: 18 },
 });
