@@ -1,9 +1,11 @@
 import { Session } from "@supabase/supabase-js";
-import { Link } from "expo-router";
+import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Button,
+  FlatList,
   Modal,
   Pressable,
   StyleSheet,
@@ -13,7 +15,6 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { SwipeListView } from "react-native-swipe-list-view";
 import { supabase } from "../../lib/supabase";
 
 type UserList = {
@@ -24,13 +25,22 @@ type UserList = {
 };
 
 export default function ListsScreen() {
+  const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [lists, setLists] = useState<UserList[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isModalVisible, setModalVisible] = useState(false);
+
+  const [isCreateModalVisible, setCreateModalVisible] = useState(false);
   const [newListName, setNewListName] = useState("");
   const [newListDescription, setNewListDescription] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+
+  const [isActionSheetVisible, setActionSheetVisible] = useState(false);
+  const [isRenameModalVisible, setRenameModalVisible] = useState(false);
+  const [selectedList, setSelectedList] = useState<UserList | null>(null);
+  const [editingListName, setEditingListName] = useState("");
+  const [editingListDescription, setEditingListDescription] = useState("");
+  const [isUpdating, setIsUpdating] = useState(false);
 
   useEffect(() => {
     const fetchSessionAndLists = async () => {
@@ -68,7 +78,7 @@ export default function ListsScreen() {
       .eq("user_id", userId)
       .order("created_at", { ascending: false });
     if (error) console.error("Error fetching lists:", error);
-    else setLists(data);
+    else setLists(data as UserList[]);
     setLoading(false);
   };
 
@@ -88,52 +98,100 @@ export default function ListsScreen() {
       console.error("Error creating list:", error.message);
     } else if (data) {
       setLists([data, ...lists]);
-      setModalVisible(false);
+      setCreateModalVisible(false);
       setNewListName("");
       setNewListDescription("");
     }
     setIsCreating(false);
   };
 
+  const handleLongPress = (list: UserList) => {
+    setSelectedList(list);
+    setEditingListName(list.name);
+    setEditingListDescription(list.description);
+    setActionSheetVisible(true);
+  };
+
+  const handleRenamePress = () => {
+    setActionSheetVisible(false);
+    setRenameModalVisible(true);
+  };
+
+  // --- THIS IS THE CORRECTED FUNCTION ---
+  const handleUpdateList = async () => {
+    if (!editingListName || !selectedList) return;
+    setIsUpdating(true);
+
+    // Perform the update without asking for the data back
+    const { error } = await supabase
+      .from("user_lists")
+      .update({ name: editingListName, description: editingListDescription })
+      .eq("id", selectedList.id);
+
+    if (error) {
+      console.error("Error updating list:", error.message);
+      Alert.alert("Error", "Could not update the list.");
+    } else {
+      // If the update is successful, update the local state manually
+      const updatedList = {
+        ...selectedList,
+        name: editingListName,
+        description: editingListDescription,
+      };
+      setLists(
+        lists.map((list) => (list.id === updatedList.id ? updatedList : list))
+      );
+      setRenameModalVisible(false);
+      setSelectedList(null);
+    }
+    setIsUpdating(false);
+  };
+
+  const handleDeletePress = () => {
+    setActionSheetVisible(false);
+    if (!selectedList) return;
+
+    Alert.alert(
+      "Delete List",
+      `Are you sure you want to delete "${selectedList.name}"? This action cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => handleDeleteList(selectedList.id),
+        },
+      ]
+    );
+  };
+
   const handleDeleteList = async (listId: number) => {
     const updatedLists = lists.filter((list) => list.id !== listId);
     setLists(updatedLists);
-
     const { error } = await supabase
       .from("user_lists")
       .delete()
       .eq("id", listId);
-
     if (error) {
       console.error("Error deleting list:", error);
       setLists(lists);
     }
   };
 
-  const renderHiddenItem = (data: { item: UserList }) => (
-    <View style={styles.rowBack}>
-      <TouchableOpacity
-        style={[styles.backRightBtn, styles.backRightBtnRight]}
-        onPress={() => handleDeleteList(data.item.id)}
-      >
-        <Text style={styles.backTextWhite}>Delete</Text>
-      </TouchableOpacity>
-    </View>
-  );
-
-  const renderListItem = (data: { item: UserList }) => (
-    <Link
-      href={{
-        pathname: "/list/[id]",
-        params: { id: data.item.id, name: data.item.name },
-      }}
-      asChild
+  const renderListItem = ({ item }: { item: UserList }) => (
+    <TouchableOpacity
+      onPress={() =>
+        router.push({
+          pathname: "/list/[id]",
+          params: { id: item.id, name: item.name },
+        })
+      }
+      onLongPress={() => handleLongPress(item)}
+      style={styles.card}
     >
-      <Pressable style={styles.card}>
-        <Text style={styles.cardTitle}>{data.item.name}</Text>
-        <Text style={styles.cardDescription}>{data.item.description}</Text>
-      </Pressable>
-    </Link>
+      <Text style={styles.cardTitle}>{item.name}</Text>
+      <Text style={styles.cardDescription}>{item.description}</Text>
+    </TouchableOpacity>
   );
 
   if (loading) {
@@ -145,8 +203,7 @@ export default function ListsScreen() {
       <SafeAreaView style={styles.loggedOutContainer}>
         <Text style={styles.loggedOutTitle}>View Your Lists</Text>
         <Text style={styles.loggedOutText}>
-          Please sign in on the Profile tab to create and view your personal
-          lists.
+          Please sign in to create and manage your lists.
         </Text>
       </SafeAreaView>
     );
@@ -154,12 +211,11 @@ export default function ListsScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* --- THIS IS THE MISSING PART THAT HAS BEEN RESTORED --- */}
       <Modal
-        animationType="slide"
+        visible={isCreateModalVisible}
+        onRequestClose={() => setCreateModalVisible(false)}
         transparent={true}
-        visible={isModalVisible}
-        onRequestClose={() => setModalVisible(false)}
+        animationType="slide"
       >
         <View style={styles.modalContainer}>
           <View style={styles.modalView}>
@@ -179,7 +235,7 @@ export default function ListsScreen() {
             <View style={styles.modalButtonContainer}>
               <Button
                 title="Cancel"
-                onPress={() => setModalVisible(false)}
+                onPress={() => setCreateModalVisible(false)}
                 color="gray"
               />
               <Button
@@ -192,23 +248,96 @@ export default function ListsScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={isRenameModalVisible}
+        onRequestClose={() => setRenameModalVisible(false)}
+        transparent={true}
+        animationType="slide"
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalView}>
+            <Text style={styles.modalTitle}>Rename List</Text>
+            <TextInput
+              style={styles.input}
+              value={editingListName}
+              onChangeText={setEditingListName}
+            />
+            <TextInput
+              style={styles.input}
+              value={editingListDescription}
+              onChangeText={setEditingListDescription}
+            />
+            <View style={styles.modalButtonContainer}>
+              <Button
+                title="Cancel"
+                onPress={() => setRenameModalVisible(false)}
+                color="gray"
+              />
+              <Button
+                title={isUpdating ? "Saving..." : "Save"}
+                onPress={handleUpdateList}
+                disabled={isUpdating}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isActionSheetVisible}
+        onRequestClose={() => setActionSheetVisible(false)}
+        transparent={true}
+        animationType="slide"
+      >
+        <Pressable
+          style={styles.actionSheetContainer}
+          onPress={() => setActionSheetVisible(false)}
+        >
+          <View style={styles.actionSheet}>
+            <TouchableOpacity
+              style={styles.actionSheetButton}
+              onPress={handleRenamePress}
+            >
+              <Text style={styles.actionSheetButtonText}>Rename List</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionSheetButton, styles.deleteButton]}
+              onPress={handleDeletePress}
+            >
+              <Text
+                style={[styles.actionSheetButtonText, styles.deleteButtonText]}
+              >
+                Delete List
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionSheetButton, { marginTop: 10 }]}
+              onPress={() => setActionSheetVisible(false)}
+            >
+              <Text
+                style={[styles.actionSheetButtonText, { fontWeight: "bold" }]}
+              >
+                Cancel
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+
       <View style={styles.headerContainer}>
         <Text style={styles.header}>My Lists</Text>
         <Pressable
           style={styles.createButton}
-          onPress={() => setModalVisible(true)}
+          onPress={() => setCreateModalVisible(true)}
         >
           <Text style={styles.createButtonText}>+ Create</Text>
         </Pressable>
       </View>
 
-      <SwipeListView
+      <FlatList
         data={lists}
         renderItem={renderListItem}
-        renderHiddenItem={renderHiddenItem}
-        rightOpenValue={-75}
         keyExtractor={(item) => item.id.toString()}
-        disableRightSwipe
         contentContainerStyle={{ paddingHorizontal: 16 }}
         ListEmptyComponent={() => (
           <View style={styles.emptyContainer}>
@@ -314,32 +443,31 @@ const styles = StyleSheet.create({
     width: "100%",
     marginTop: 10,
   },
-  rowBack: {
-    alignItems: "center",
-    backgroundColor: "#FF3B30",
+  actionSheetContainer: {
     flex: 1,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingLeft: 15,
-    marginVertical: 8,
-    borderRadius: 10,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.4)",
   },
-  backRightBtn: {
+  actionSheet: {
+    backgroundColor: "#f8f8f8",
+    padding: 16,
+    paddingBottom: 30,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+  actionSheetButton: {
+    backgroundColor: "white",
+    padding: 16,
+    borderRadius: 12,
     alignItems: "center",
-    bottom: 0,
-    justifyContent: "center",
-    position: "absolute",
-    top: 0,
-    width: 75,
+    marginBottom: 8,
   },
-  backRightBtnRight: {
-    backgroundColor: "#FF3B30",
-    right: 0,
-    borderTopRightRadius: 10,
-    borderBottomRightRadius: 10,
+  actionSheetButtonText: {
+    fontSize: 18,
+    color: "#007AFF",
   },
-  backTextWhite: {
-    color: "#FFF",
-    fontWeight: "600",
+  deleteButton: {},
+  deleteButtonText: {
+    color: "#FF3B30",
   },
 });

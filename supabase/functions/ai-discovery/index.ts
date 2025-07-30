@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { corsHeaders } from "../_shared/cors.ts";
 
-// Type definitions for clarity
+// Type definitions are unchanged
 interface Tag {
   name: string;
 }
@@ -20,14 +20,12 @@ interface Place {
 }
 
 Deno.serve(async (req: Request) => {
-  console.log("--- Function Invoked (Final Production Version) ---");
-
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
-    // 1. Authenticate the user
+    // --- User Authentication and Admin Client setup (unchanged) ---
     const userClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
@@ -42,16 +40,13 @@ Deno.serve(async (req: Request) => {
     } = await userClient.auth.getUser();
     if (!user) throw new Error("Unauthorized");
 
-    // 2. Create an admin client to bypass RLS for trusted server operations
     const serviceKey = Deno.env.get("SERVICE_ROLE_KEY") ?? "";
     if (!serviceKey) throw new Error("SERVICE_ROLE_KEY is not set.");
-
     const adminClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       serviceKey
     );
 
-    // 3. Check for sufficient AI credits
     const { data: profile } = await adminClient
       .from("profiles")
       .select("ai_credits")
@@ -70,13 +65,26 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const { queryText, cityId } = await req.json();
+    // --- NEW: The function now accepts hard filters from the app ---
+    const { queryText, cityId, selectedCategories } = await req.json();
     if (!queryText || !cityId) {
       throw new Error('Missing "queryText" or "cityId" in the request body.');
     }
 
-    // 4. Fetch all place data to build context for the AI
-    const { data: places, error: placesError } = await adminClient
+    // Step A: Translate category names to category IDs
+    let categoryIds: number[] = [];
+    if (selectedCategories && selectedCategories.length > 0) {
+      const { data: categoriesData, error: categoriesError } = await adminClient
+        .from("categories")
+        .select("id")
+        .in("name", selectedCategories);
+
+      if (categoriesError) throw categoriesError;
+      categoryIds = categoriesData.map((c) => c.id);
+    }
+
+    // Step B: Build the main query using the translated IDs
+    let query = adminClient
       .from("places")
       .select(
         "id, name, description, notes, neighborhood, budget_level, categories (name), tags (name)"
@@ -84,13 +92,23 @@ Deno.serve(async (req: Request) => {
       .eq("city_id", String(cityId))
       .eq("status", "published");
 
-    if (placesError) throw placesError;
-    if (!places || places.length === 0) {
-      throw new Error(
-        `No places found for cityId: ${cityId} with status 'published'.`
-      );
+    // Step C: Apply the "hard filter" for categories using the IDs
+    if (categoryIds.length > 0) {
+      query = query.in("category_id", categoryIds);
     }
 
+    const { data: places, error: placesError } = await query;
+
+    if (placesError) throw placesError;
+    if (!places || places.length === 0) {
+      // It's not an error if no places match, just return an empty list.
+      return new Response(JSON.stringify([]), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200,
+      });
+    }
+
+    // The rest of the function now operates on the smaller, pre-filtered list of places
     const placesContext = (places as Place[])
       .map((p: Place) => {
         const tags = p.tags.map((t) => t.name).join(", ");
@@ -98,18 +116,22 @@ Deno.serve(async (req: Request) => {
       })
       .join("\n");
 
-    // 5. Call the Gemini API
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
     if (!geminiApiKey) throw new Error("GEMINI_API_KEY is not set.");
 
-    const prompt = `You are a travel discovery assistant for an app called "Detour Club". Your task is to analyze a user's request and a provided list of curated places. You must select the top 3-5 places that best match the user's request.
+    // --- NEW: The prompt is updated to reflect the pre-filtering ---
+    const prompt = `You are a travel discovery assistant for an app called "Detour Club".
+    Your task is to act as a powerful ranking engine. I have already pre-filtered a list of places based on the user's hard constraints (like category).
+    Your job is to analyze the user's more nuanced request and select the best matches from **this pre-filtered list only**.
 
-    User Request: "${queryText}"
+    **CRITICAL INSTRUCTION FOR BUDGET:** The 'budget_level' field uses this mapping: '$' = 'Budget', '$$' = 'Balanced', '$$$' = 'Luxury'.
 
-    Here is the list of available places:
+    **User's Nuanced Request:** "${queryText}"
+
+    **Pre-filtered List of Available Places:**
     ${placesContext}
 
-    Based on the user's request, return a JSON object with a single key "place_ids" which is an array of the integer IDs of the recommended places. For example: {"place_ids": [123, 45, 678]}. Do not explain your choices, only return the JSON.
+    Based on the user's request, return a JSON object with a single key "place_ids" which is an array of the integer IDs of ALL places from the provided list that are a strong match. Do not limit the number of results. If no places are a strong match, return an empty array.
     `;
 
     const geminiResponse = await fetch(
@@ -130,27 +152,31 @@ Deno.serve(async (req: Request) => {
       );
 
     const responseData = await geminiResponse.json();
-    const { place_ids } = JSON.parse(
-      responseData.candidates[0].content.parts[0].text
-    );
+    // Add a safety check in case the AI returns an empty response
+    const place_ids =
+      JSON.parse(responseData.candidates[0].content.parts[0].text).place_ids ||
+      [];
 
-    // --- THIS IS THE FIX ---
-    // 6. Deduct credits from the user's profile in the database
+    // If the AI returns no matches, we don't need to do anything else
+    if (place_ids.length === 0) {
+      return new Response(JSON.stringify([]), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200,
+      });
+    }
+
     const newCreditTotal = profile.ai_credits - AI_CREDIT_COST;
     await adminClient
       .from("profiles")
       .update({ ai_credits: newCreditTotal })
       .eq("id", user.id);
 
-    // 7. Fetch the full details of the recommended places to return to the app
     const { data: finalPlaces, error: finalPlacesError } = await adminClient
       .from("places")
       .select("*, categories (id, name)")
       .in("id", place_ids);
-
     if (finalPlacesError) throw finalPlacesError;
 
-    // 8. Return the final result
     return new Response(JSON.stringify(finalPlaces), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,

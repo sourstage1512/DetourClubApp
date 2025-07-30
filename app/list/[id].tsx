@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Stack, useLocalSearchParams, useNavigation } from "expo-router";
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   SafeAreaView,
   StyleSheet,
@@ -27,31 +28,74 @@ type Place = {
 export default function ListDetailScreen() {
   const { id, name } = useLocalSearchParams();
   const navigation = useNavigation();
-  const [places, setPlaces] = useState<Place[]>([]);
+
+  const [originalPlaces, setOriginalPlaces] = useState<Place[]>([]);
+  const [editingPlaces, setEditingPlaces] = useState<Place[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const listName = Array.isArray(name) ? name[0] : name;
+  const listId = Array.isArray(id)
+    ? parseInt(id[0], 10)
+    : parseInt(id as string, 10);
 
+  const handleEnterEditMode = useCallback(() => {
+    setEditingPlaces([...originalPlaces]);
+    setIsEditing(true);
+  }, [originalPlaces]);
+
+  const handleCancelEdits = useCallback(() => {
+    setEditingPlaces([...originalPlaces]);
+    setIsEditing(false);
+  }, [originalPlaces]);
+
+  const handleSaveChanges = useCallback(async () => {
+    const originalIds = new Set(originalPlaces.map((p) => p.id));
+    const editedIds = new Set(editingPlaces.map((p) => p.id));
+
+    const idsToRemove = [...originalIds].filter((id) => !editedIds.has(id));
+
+    if (idsToRemove.length === 0) {
+      setIsEditing(false);
+      return;
+    }
+
+    const { error } = await supabase
+      .from("list_places")
+      .delete()
+      .eq("list_id", listId)
+      .in("place_id", idsToRemove);
+
+    if (error) {
+      console.error("Error saving changes:", error);
+      Alert.alert("Error", "Could not save changes. Please try again.");
+    } else {
+      setOriginalPlaces([...editingPlaces]);
+    }
+    setIsEditing(false);
+  }, [originalPlaces, editingPlaces, listId]);
+
+  // --- UPDATED: Header now only shows the pencil icon when NOT editing ---
   useLayoutEffect(() => {
     navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity
-          style={styles.headerIconContainer}
-          onPress={() => setIsEditing(!isEditing)}
-        >
-          <Ionicons
-            name={isEditing ? "checkmark-done-sharp" : "pencil"}
-            size={24}
-            color="#6366F1"
-          />
-        </TouchableOpacity>
-      ),
+      headerRight: () => {
+        if (!isEditing) {
+          return (
+            <TouchableOpacity
+              style={styles.headerIconContainer}
+              onPress={handleEnterEditMode}
+            >
+              <Ionicons name="pencil" size={24} color="#6366F1" />
+            </TouchableOpacity>
+          );
+        }
+        // Return null to hide buttons when editing
+        return null;
+      },
     });
-  }, [navigation, isEditing]);
+  }, [navigation, isEditing, handleEnterEditMode]);
 
   useEffect(() => {
-    if (!id) return;
-    const listId = Array.isArray(id) ? parseInt(id[0], 10) : parseInt(id, 10);
     if (isNaN(listId)) return;
     const fetchListPlaces = async () => {
       setLoading(true);
@@ -59,26 +103,22 @@ export default function ListDetailScreen() {
         .from("list_places")
         .select(`places (*, categories (id, name))`)
         .eq("list_id", listId);
-      if (error) console.error("Error fetching list places:", error);
-      else {
-        const fetchedPlaces = data.map((item: any) => item.places);
-        setPlaces(fetchedPlaces.filter(Boolean));
+      if (error) {
+        console.error("Error fetching list places:", error);
+      } else {
+        const fetchedPlaces = data
+          .map((item: any) => item.places)
+          .filter(Boolean);
+        setOriginalPlaces(fetchedPlaces);
+        setEditingPlaces(fetchedPlaces);
       }
       setLoading(false);
     };
     fetchListPlaces();
-  }, [id]);
+  }, [listId]);
 
-  const handleRemovePlace = async (placeId: number) => {
-    const listId = Array.isArray(id) ? parseInt(id[0], 10) : parseInt(id!, 10);
-    if (isNaN(listId)) return;
-    setPlaces(places.filter((p) => p.id !== placeId));
-    const { error } = await supabase
-      .from("list_places")
-      .delete()
-      .eq("list_id", listId)
-      .eq("place_id", placeId);
-    if (error) console.error("Error removing place:", error);
+  const handleRemovePlace = (placeId: number) => {
+    setEditingPlaces(editingPlaces.filter((p) => p.id !== placeId));
   };
 
   const renderGridItem = ({ item }: { item: Place }) => (
@@ -106,17 +146,40 @@ export default function ListDetailScreen() {
       />
       <Text style={styles.header}>{listName || "List"}</Text>
       <FlatList
-        data={places}
+        data={isEditing ? editingPlaces : originalPlaces}
         renderItem={renderGridItem}
         keyExtractor={(item) => item.id.toString()}
         numColumns={2}
-        ListEmptyComponent={() => (
+        contentContainerStyle={isEditing ? { paddingBottom: 100 } : null} // Add padding when editing
+        ListEmptyComponent={
           <Text style={styles.emptyText}>
             This list is empty. Add some places!
           </Text>
-        )}
+        }
       />
-    </SafeAreaView> // --- THIS CLOSING TAG WAS MISSING ---
+
+      {/* --- NEW: Sticky footer bar for edit mode --- */}
+      {isEditing && (
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={[styles.footerButton, styles.cancelButton]}
+            onPress={handleCancelEdits}
+          >
+            <Text style={[styles.footerButtonText, styles.cancelButtonText]}>
+              Cancel
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.footerButton, styles.saveButton]}
+            onPress={handleSaveChanges}
+          >
+            <Text style={[styles.footerButtonText, styles.saveButtonText]}>
+              Save Changes
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </SafeAreaView>
   );
 }
 
@@ -124,7 +187,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#f8f8f8",
-    paddingHorizontal: 8,
   },
   loader: {
     flex: 1,
@@ -133,7 +195,7 @@ const styles = StyleSheet.create({
   header: {
     fontSize: 28,
     fontWeight: "bold",
-    paddingHorizontal: 8,
+    paddingHorizontal: 16,
     paddingTop: 10,
     paddingBottom: 10,
   },
@@ -148,7 +210,7 @@ const styles = StyleSheet.create({
     color: "#666",
   },
   gridItemContainer: {
-    width: "50%", // This forces a fixed width for each item
+    width: "50%",
     padding: 8,
   },
   removeIcon: {
@@ -157,5 +219,48 @@ const styles = StyleSheet.create({
     right: 0,
     backgroundColor: "white",
     borderRadius: 15,
+  },
+  // --- NEW: Styles for the sticky footer ---
+  footer: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    padding: 20,
+    paddingBottom: 30, // Extra padding for home bar
+    backgroundColor: "white",
+    borderTopWidth: 1,
+    borderTopColor: "#e0e0e0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  footerButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  cancelButton: {
+    backgroundColor: "#f0f0f0",
+    marginRight: 10,
+  },
+  saveButton: {
+    backgroundColor: "#6366F1",
+    marginLeft: 10,
+  },
+  footerButtonText: {
+    fontSize: 16,
+    fontWeight: "bold",
+  },
+  cancelButtonText: {
+    color: "#333",
+  },
+  saveButtonText: {
+    color: "white",
   },
 });
