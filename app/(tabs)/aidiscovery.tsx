@@ -1,10 +1,12 @@
 import { Session } from "@supabase/supabase-js";
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
@@ -41,16 +43,18 @@ export default function AiDiscoveryScreen() {
   const [aiCredits, setAiCredits] = useState<number>(0);
   const [loadingCredits, setLoadingCredits] = useState(true);
 
+  const scrollViewRef = useRef<ScrollView>(null);
+
   // State for all filters
   const [categories, setCategories] = useState<Category[]>([]);
   const [cities, setCities] = useState<City[]>([]);
   const [selectedCity, setSelectedCity] = useState<City | null>(null);
   const [isCityModalVisible, setCityModalVisible] = useState(false);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
-  const [selectedBudget, setSelectedBudget] = useState<Budget | null>(null);
+  const [selectedBudgets, setSelectedBudgets] = useState<Budget[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<GroupType | null>(null);
   const [selectedDiet, setSelectedDiet] = useState<Diet>("Any");
-  const [includeLocal, setIncludeLocal] = useState(true); // New state for the toggle
+  const [includeLocal, setIncludeLocal] = useState(true);
   const [additionalInstructions, setAdditionalInstructions] = useState("");
 
   // Data fetching logic
@@ -103,42 +107,62 @@ export default function AiDiscoveryScreen() {
     );
   };
 
+  const toggleBudget = (budget: Budget) => {
+    setSelectedBudgets((prev) =>
+      prev.includes(budget)
+        ? prev.filter((b) => b !== budget)
+        : [...prev, budget]
+    );
+  };
+
   const handleGenerate = async () => {
     if (!selectedCity) {
       Alert.alert("Please select a city before generating suggestions.");
       return;
     }
-
     setLoading(true);
     setError(null);
 
+    // The query building logic is now simpler, as it only handles "soft" preferences
     let queryParts = [];
-    if (selectedCategories.length > 0)
-      queryParts.push(`for a ${selectedCategories.join(" or ")}`);
-    if (selectedBudget)
-      queryParts.push(`that is ${selectedBudget.toLowerCase()}`);
-    if (selectedGroup)
+    if (selectedBudgets.length > 0) {
+      queryParts.push(
+        `that is ${selectedBudgets.map((b) => b.toLowerCase()).join(" or ")}`
+      );
+    }
+    if (selectedGroup) {
       queryParts.push(`that is good for a ${selectedGroup.toLowerCase()} trip`);
-    if (selectedDiet !== "Any")
+    }
+    if (selectedDiet !== "Any") {
       queryParts.push(`with ${selectedDiet.toLowerCase()} options`);
+    }
     if (includeLocal) {
       queryParts.push(
         "prioritizing unique activities and hidden gems recommended by locals"
       );
     }
-    if (additionalInstructions) queryParts.push(additionalInstructions);
+    if (additionalInstructions) {
+      queryParts.push(additionalInstructions);
+    }
 
+    // The final query is now more focused on the nuanced parts of the request
     const finalQuery = "I'm looking for a place " + queryParts.join(" ") + ".";
 
-    if (queryParts.length === 0) {
+    // We still check to make sure the user has provided *some* input
+    if (selectedCategories.length === 0 && queryParts.length === 0) {
       Alert.alert("Please select some options or type a description.");
       setLoading(false);
       return;
     }
 
     try {
+      // The body of the invoke call now includes the 'selectedCategories' as a hard filter
       const { data, error } = await supabase.functions.invoke("ai-discovery", {
-        body: { queryText: finalQuery, cityId: selectedCity.id },
+        body: {
+          queryText: finalQuery,
+          cityId: selectedCity.id,
+          selectedCategories: selectedCategories, // Pass the hard filter
+        },
       });
 
       if (error) throw error;
@@ -155,6 +179,10 @@ export default function AiDiscoveryScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleTextInputFocus = () => {
+    scrollViewRef.current?.scrollToEnd({ animated: true });
   };
 
   if (!session) {
@@ -199,171 +227,187 @@ export default function AiDiscoveryScreen() {
         </TouchableOpacity>
       </Modal>
 
-      <View style={styles.header}>
-        <Text style={styles.title}>Discovery Assistant</Text>
-        {loadingCredits ? (
-          <ActivityIndicator />
-        ) : (
-          <Text style={styles.creditsText}>{aiCredits} AI credits left</Text>
-        )}
-      </View>
-
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>City</Text>
-          <TouchableOpacity
-            style={styles.dropdownButton}
-            onPress={() => setCityModalVisible(true)}
-          >
-            <Text style={styles.dropdownButtonText}>
-              {selectedCity ? selectedCity.name : "Select a City"}
-            </Text>
-          </TouchableOpacity>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1 }}
+      >
+        <View style={styles.header}>
+          <Text style={styles.title}>Discovery Assistant</Text>
+          {loadingCredits ? (
+            <ActivityIndicator />
+          ) : (
+            <Text style={styles.creditsText}>{aiCredits} AI credits left</Text>
+          )}
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Place Type</Text>
-          <View style={styles.pillsContainer}>
-            {categories.map((cat) => (
-              <TouchableOpacity
-                key={cat.id}
-                style={
-                  selectedCategories.includes(cat.name)
-                    ? styles.pillSelected
-                    : styles.pill
-                }
-                onPress={() => toggleCategory(cat.name)}
-              >
-                <Text
+        <ScrollView
+          ref={scrollViewRef}
+          contentContainerStyle={styles.scrollContainer}
+        >
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>City</Text>
+            <TouchableOpacity
+              style={styles.dropdownButton}
+              onPress={() => setCityModalVisible(true)}
+            >
+              <Text style={styles.dropdownButtonText}>
+                {selectedCity ? selectedCity.name : "Select a City"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Place Type</Text>
+            <View style={styles.pillsContainer}>
+              {categories.map((cat) => (
+                <TouchableOpacity
+                  key={cat.id}
                   style={
                     selectedCategories.includes(cat.name)
-                      ? styles.pillTextSelected
-                      : styles.pillText
+                      ? styles.pillSelected
+                      : styles.pill
                   }
+                  onPress={() => toggleCategory(cat.name)}
                 >
-                  {cat.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <Text
+                    style={
+                      selectedCategories.includes(cat.name)
+                        ? styles.pillTextSelected
+                        : styles.pillText
+                    }
+                  >
+                    {cat.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
-        </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Budget Level</Text>
-          <View style={styles.pillsContainer}>
-            {BUDGET_LEVELS.map((budget) => (
-              <TouchableOpacity
-                key={budget}
-                style={
-                  selectedBudget === budget ? styles.pillSelected : styles.pill
-                }
-                onPress={() => setSelectedBudget(budget)}
-              >
-                <Text
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Budget Level</Text>
+            <View style={styles.pillsContainer}>
+              {BUDGET_LEVELS.map((budget) => (
+                <TouchableOpacity
+                  key={budget}
                   style={
-                    selectedBudget === budget
-                      ? styles.pillTextSelected
-                      : styles.pillText
+                    selectedBudgets.includes(budget)
+                      ? styles.pillSelected
+                      : styles.pill
                   }
+                  onPress={() => toggleBudget(budget)}
                 >
-                  {budget}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <Text
+                    style={
+                      selectedBudgets.includes(budget)
+                        ? styles.pillTextSelected
+                        : styles.pillText
+                    }
+                  >
+                    {budget}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
-        </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Traveling Group Type</Text>
-          <View style={styles.pillsContainer}>
-            {GROUP_TYPES.map((group) => (
-              <TouchableOpacity
-                key={group}
-                style={
-                  selectedGroup === group ? styles.pillSelected : styles.pill
-                }
-                onPress={() => setSelectedGroup(group)}
-              >
-                <Text
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Traveling Group Type</Text>
+            <View style={styles.pillsContainer}>
+              {GROUP_TYPES.map((group) => (
+                <TouchableOpacity
+                  key={group}
                   style={
-                    selectedGroup === group
-                      ? styles.pillTextSelected
-                      : styles.pillText
+                    selectedGroup === group ? styles.pillSelected : styles.pill
                   }
+                  onPress={() => setSelectedGroup(group)}
                 >
-                  {group}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <Text
+                    style={
+                      selectedGroup === group
+                        ? styles.pillTextSelected
+                        : styles.pillText
+                    }
+                  >
+                    {group}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
-        </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Dietary Restrictions</Text>
-          <View style={styles.pillsContainer}>
-            {DIETARY_RESTRICTIONS.map((diet) => (
-              <TouchableOpacity
-                key={diet}
-                style={
-                  selectedDiet === diet ? styles.pillSelected : styles.pill
-                }
-                onPress={() => setSelectedDiet(diet)}
-              >
-                <Text
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Dietary Restrictions</Text>
+            <View style={styles.pillsContainer}>
+              {DIETARY_RESTRICTIONS.map((diet) => (
+                <TouchableOpacity
+                  key={diet}
                   style={
-                    selectedDiet === diet
-                      ? styles.pillTextSelected
-                      : styles.pillText
+                    selectedDiet === diet ? styles.pillSelected : styles.pill
                   }
+                  onPress={() => setSelectedDiet(diet)}
                 >
-                  {diet}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <Text
+                    style={
+                      selectedDiet === diet
+                        ? styles.pillTextSelected
+                        : styles.pillText
+                    }
+                  >
+                    {diet}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
-        </View>
 
-        <View style={styles.toggleSection}>
-          <View>
-            <Text style={styles.sectionTitle}>Include local experiences</Text>
-            <Text style={styles.toggleSubtitle}>
-              Find unique activities and hidden gems
-            </Text>
+          <View style={styles.toggleSection}>
+            <View>
+              <Text style={styles.sectionTitle}>Include local experiences</Text>
+              <Text style={styles.toggleSubtitle}>
+                Find unique activities and hidden gems
+              </Text>
+            </View>
+            <Switch
+              trackColor={{ false: "#767577", true: "#81b0ff" }}
+              thumbColor={includeLocal ? "#6366F1" : "#f4f3f4"}
+              onValueChange={() =>
+                setIncludeLocal((previousState) => !previousState)
+              }
+              value={includeLocal}
+            />
           </View>
-          <Switch
-            trackColor={{ false: "#767577", true: "#81b0ff" }}
-            thumbColor={includeLocal ? "#6366F1" : "#f4f3f4"}
-            onValueChange={() =>
-              setIncludeLocal((previousState) => !previousState)
-            }
-            value={includeLocal}
-          />
-        </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Additional Instructions</Text>
-          <TextInput
-            style={styles.textInput}
-            placeholder="e.g., with a great view and live music..."
-            multiline
-            value={additionalInstructions}
-            onChangeText={setAdditionalInstructions}
-          />
-        </View>
-        {error && <Text style={styles.errorText}>Error: {error}</Text>}
-      </ScrollView>
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Additional Instructions</Text>
+            <TextInput
+              style={styles.textInput}
+              placeholder="e.g., with a great view and live music..."
+              multiline
+              value={additionalInstructions}
+              onChangeText={setAdditionalInstructions}
+              onFocus={handleTextInputFocus}
+            />
+          </View>
+          {error && <Text style={styles.errorText}>Error: {error}</Text>}
+        </ScrollView>
 
-      <View style={styles.footer}>
-        <TouchableOpacity
-          style={styles.generateButton}
-          onPress={handleGenerate}
-          disabled={loading}
-        >
-          <Text style={styles.generateButtonText}>
-            {loading ? "Generating..." : "Let's Go!"}
-          </Text>
-        </TouchableOpacity>
-      </View>
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={[
+              styles.generateButton,
+              loading && styles.generateButtonDisabled,
+            ]}
+            onPress={handleGenerate}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.generateButtonText}>Let&rsquo;s Go!</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -439,6 +483,11 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderRadius: 10,
     alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+  },
+  generateButtonDisabled: {
+    backgroundColor: "#a5b4fc",
   },
   generateButtonText: {
     color: "#fff",
