@@ -1,18 +1,21 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Button, Input } from "@rneui/themed";
 import { Session } from "@supabase/supabase-js";
-import { useFocusEffect } from "expo-router"; // NEW: Import useFocusEffect
-import { useCallback, useEffect, useState } from "react"; // NEW: Import useCallback
+import * as ImagePicker from "expo-image-picker"; // NEW: Import Image Picker
+import { useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
+  Text, // NEW: Import Image component
+  TouchableOpacity,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -41,46 +44,53 @@ function ProfileDetails({ session }: { session: Session }) {
   const [loading, setLoading] = useState(true);
   const [fullName, setFullName] = useState("");
   const [bio, setBio] = useState("");
-  const [avatarUrl, setAvatarUrl] = useState("");
+
+  // --- NEW: State for the avatar ---
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null); // This will hold the displayable URL
+  const [newLocalImage, setNewLocalImage] =
+    useState<ImagePicker.ImagePickerAsset | null>(null); // Holds the new image selected by the user
+
   const [aiCredits, setAiCredits] = useState(0);
   const [listCount, setListCount] = useState(0);
 
   const { user } = session;
 
-  // --- THIS IS THE KEY CHANGE ---
-  // 1. The data fetching logic is wrapped in useCallback
   const getProfileAndStats = useCallback(() => {
     let ignore = false;
     async function fetchData() {
       setLoading(true);
 
-      const profilePromise = supabase
+      const { data, error } = await supabase
         .from("profiles")
         .select(`full_name, bio, avatar_url, ai_credits`)
         .eq("id", user.id)
         .single();
-      const listCountPromise = supabase
+      if (error) console.warn(error);
+      if (!ignore && data) {
+        setFullName(data.full_name || "");
+        setBio(data.bio || "");
+        setAiCredits(data.ai_credits || 0);
+
+        // --- NEW: Fetch the secure, signed URL for the avatar ---
+        if (data.avatar_url) {
+          const { data: signedUrlData, error: signedUrlError } =
+            await supabase.storage
+              .from("avatars")
+              .createSignedUrl(data.avatar_url, 3600); // URL valid for 1 hour
+          if (signedUrlError) {
+            console.warn("Error creating signed URL:", signedUrlError);
+          } else {
+            setAvatarUrl(signedUrlData.signedUrl);
+          }
+        }
+      }
+
+      const { count: listCountData } = await supabase
         .from("user_lists")
         .select("id", { count: "exact", head: true })
         .eq("user_id", user.id);
+      if (!ignore && listCountData !== null) setListCount(listCountData);
 
-      const [profileResult, listCountResult] = await Promise.all([
-        profilePromise,
-        listCountPromise,
-      ]);
-
-      if (!ignore) {
-        if (profileResult.error) {
-          console.warn(profileResult.error);
-        } else if (profileResult.data) {
-          setFullName(profileResult.data.full_name || "");
-          setBio(profileResult.data.bio || "");
-          setAvatarUrl(profileResult.data.avatar_url || "");
-          setAiCredits(profileResult.data.ai_credits || 0);
-        }
-
-        if (listCountResult.count !== null) setListCount(listCountResult.count);
-      }
       setLoading(false);
     }
 
@@ -90,18 +100,64 @@ function ProfileDetails({ session }: { session: Session }) {
     };
   }, [user.id]);
 
-  // 2. We use useFocusEffect to call the function every time the screen is focused
   useFocusEffect(getProfileAndStats);
-  // --- END OF KEY CHANGE ---
+
+  // --- NEW: Function to handle picking an image from the gallery ---
+  const pickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Sorry, we need camera roll permissions to make this work!");
+      return;
+    }
+
+    let result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: "Images",
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      setNewLocalImage(result.assets[0]);
+      setAvatarUrl(result.assets[0].uri); // Show a preview of the new image immediately
+    }
+  };
 
   async function updateProfile() {
     setLoading(true);
+    let newAvatarPath: string | undefined = undefined;
+
+    // --- NEW: Upload logic for the new image ---
+    if (newLocalImage) {
+      const fileExt = newLocalImage.uri.split(".").pop();
+      const fileName = `${user.id}.${fileExt}`;
+      const filePath = `${user.id}/${fileName}`;
+
+      const formData = new FormData();
+      formData.append("file", {
+        uri: newLocalImage.uri,
+        name: fileName,
+        type: newLocalImage.mimeType ?? "image/jpeg",
+      } as any);
+
+      const { error: uploadError } = await supabase.storage
+        .from("avatars")
+        .upload(filePath, formData, { upsert: true }); // upsert = true allows overwriting
+
+      if (uploadError) {
+        Alert.alert("Error uploading image:", uploadError.message);
+        setLoading(false);
+        return;
+      }
+      newAvatarPath = filePath;
+    }
+
     const updates = {
       id: user.id,
       full_name: fullName,
       bio: bio,
-      avatar_url: avatarUrl,
       updated_at: new Date(),
+      ...(newAvatarPath && { avatar_url: newAvatarPath }), // Only include avatar_url if a new one was uploaded
     };
 
     const { error } = await supabase.from("profiles").upsert(updates);
@@ -109,6 +165,7 @@ function ProfileDetails({ session }: { session: Session }) {
       Alert.alert(error.message);
     } else {
       Alert.alert("Success", "Profile updated successfully!");
+      setNewLocalImage(null); // Clear the temporary local image
       Keyboard.dismiss();
     }
     setLoading(false);
@@ -124,10 +181,21 @@ function ProfileDetails({ session }: { session: Session }) {
         keyboardShouldPersistTaps="handled"
       >
         <Pressable onPress={Keyboard.dismiss}>
+          {/* --- NEW: Interactive Profile Header --- */}
           <View style={styles.profileHeader}>
-            <View style={styles.avatarPlaceholder}>
-              <Ionicons name="person-outline" size={60} color="#6366F1" />
-            </View>
+            <TouchableOpacity onPress={pickImage}>
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Ionicons
+                    name="person-add-outline"
+                    size={60}
+                    color="#6366F1"
+                  />
+                </View>
+              )}
+            </TouchableOpacity>
             <Text style={styles.fullName}>{fullName || "New User"}</Text>
             <Text style={styles.email}>{user.email}</Text>
           </View>
@@ -164,13 +232,7 @@ function ProfileDetails({ session }: { session: Session }) {
               placeholder="Tell us about yourself"
               multiline
             />
-            <Input
-              label="Avatar URL"
-              value={avatarUrl}
-              onChangeText={setAvatarUrl}
-              placeholder="https://.../your-image.png"
-              autoCapitalize="none"
-            />
+            {/* Avatar URL input is now removed */}
             <Button
               title={loading ? "Saving..." : "Update Profile"}
               onPress={updateProfile}
@@ -217,6 +279,7 @@ export default function ProfileScreen() {
   );
 }
 
+// --- UPDATED STYLES for Avatar ---
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -232,6 +295,13 @@ const styles = StyleSheet.create({
   profileHeader: {
     alignItems: "center",
     marginBottom: 24,
+  },
+  avatar: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    marginBottom: 16,
+    backgroundColor: "#e0e7ff",
   },
   avatarPlaceholder: {
     width: 120,
