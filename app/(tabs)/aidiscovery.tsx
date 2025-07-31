@@ -1,6 +1,7 @@
 import { Session } from "@supabase/supabase-js";
-import { useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import * as Location from "expo-location";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -24,6 +25,7 @@ type City = { id: number; name: string };
 type Budget = "Budget" | "Balanced" | "Luxury";
 type GroupType = "Solo" | "Couple" | "Group" | "Family";
 type Diet = "Any" | "Vegetarian" | "Vegan" | "Gluten-Free";
+type Radius = "5 KM" | "10 KM" | "20 KM" | "Anywhere";
 
 // Constants for our filters
 const BUDGET_LEVELS: Budget[] = ["Budget", "Balanced", "Luxury"];
@@ -34,6 +36,7 @@ const DIETARY_RESTRICTIONS: Diet[] = [
   "Vegan",
   "Gluten-Free",
 ];
+const SEARCH_RADII: Radius[] = ["5 KM", "10 KM", "20 KM", "Anywhere"];
 
 export default function AiDiscoveryScreen() {
   const router = useRouter();
@@ -41,7 +44,7 @@ export default function AiDiscoveryScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aiCredits, setAiCredits] = useState<number>(0);
-  const [loadingCredits, setLoadingCredits] = useState(true);
+  const [loadingInitialData, setLoadingInitialData] = useState(true);
 
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -57,7 +60,12 @@ export default function AiDiscoveryScreen() {
   const [includeLocal, setIncludeLocal] = useState(true);
   const [additionalInstructions, setAdditionalInstructions] = useState("");
 
-  // Data fetching logic
+  // State for Geolocation
+  const [searchNearby, setSearchNearby] = useState(false);
+  const [selectedRadius, setSelectedRadius] = useState<Radius>("Anywhere");
+  const [userLocation, setUserLocation] =
+    useState<Location.LocationObject | null>(null);
+
   useEffect(() => {
     supabase.auth
       .getSession()
@@ -68,36 +76,62 @@ export default function AiDiscoveryScreen() {
     return () => authListener.subscription.unsubscribe();
   }, []);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      if (session?.user) {
-        setLoadingCredits(true);
-        const creditsPromise = supabase
-          .from("profiles")
-          .select("ai_credits")
-          .eq("id", session.user.id)
-          .single();
-        const categoriesPromise = supabase
-          .from("categories")
-          .select("id, name");
-        const citiesPromise = supabase
-          .from("cities")
-          .select("id, name")
-          .order("name", { ascending: true });
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+      const fetchData = async () => {
+        if (session?.user) {
+          setLoadingInitialData(true);
+          const creditsPromise = supabase
+            .from("profiles")
+            .select("ai_credits")
+            .eq("id", session.user.id)
+            .single();
+          const categoriesPromise = supabase
+            .from("categories")
+            .select("id, name");
+          const citiesPromise = supabase
+            .from("cities")
+            .select("id, name")
+            .order("name", { ascending: true });
 
-        const [creditsResult, categoriesResult, citiesResult] =
-          await Promise.all([creditsPromise, categoriesPromise, citiesPromise]);
-        if (creditsResult.data) setAiCredits(creditsResult.data.ai_credits);
-        if (categoriesResult.data) setCategories(categoriesResult.data);
-        if (citiesResult.data) setCities(citiesResult.data);
-        setLoadingCredits(false);
-      } else {
-        setAiCredits(0);
-        setLoadingCredits(false);
+          const [creditsResult, categoriesResult, citiesResult] =
+            await Promise.all([
+              creditsPromise,
+              categoriesPromise,
+              citiesPromise,
+            ]);
+
+          if (isActive) {
+            if (creditsResult.data) setAiCredits(creditsResult.data.ai_credits);
+            if (categoriesResult.data) setCategories(categoriesResult.data);
+            if (citiesResult.data) setCities(citiesResult.data);
+            setLoadingInitialData(false);
+          }
+        } else {
+          if (isActive) {
+            setAiCredits(0);
+            setLoadingInitialData(false);
+          }
+        }
+      };
+      fetchData();
+      return () => {
+        isActive = false;
+      };
+    }, [session])
+  );
+
+  useEffect(() => {
+    (async () => {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        return;
       }
-    };
-    fetchData();
-  }, [session]);
+      let location = await Location.getCurrentPositionAsync({});
+      setUserLocation(location);
+    })();
+  }, []);
 
   const toggleCategory = (categoryName: string) => {
     setSelectedCategories((prev) =>
@@ -116,14 +150,20 @@ export default function AiDiscoveryScreen() {
   };
 
   const handleGenerate = async () => {
-    if (!selectedCity) {
+    if (!selectedCity && !searchNearby) {
       Alert.alert("Please select a city before generating suggestions.");
+      return;
+    }
+    if (searchNearby && !userLocation) {
+      Alert.alert(
+        "Location not available",
+        "Could not get your current location. Please ensure location services are enabled."
+      );
       return;
     }
     setLoading(true);
     setError(null);
 
-    // The query building logic is now simpler, as it only handles "soft" preferences
     let queryParts = [];
     if (selectedBudgets.length > 0) {
       queryParts.push(
@@ -145,10 +185,8 @@ export default function AiDiscoveryScreen() {
       queryParts.push(additionalInstructions);
     }
 
-    // The final query is now more focused on the nuanced parts of the request
     const finalQuery = "I'm looking for a place " + queryParts.join(" ") + ".";
 
-    // We still check to make sure the user has provided *some* input
     if (selectedCategories.length === 0 && queryParts.length === 0) {
       Alert.alert("Please select some options or type a description.");
       setLoading(false);
@@ -156,13 +194,23 @@ export default function AiDiscoveryScreen() {
     }
 
     try {
-      // The body of the invoke call now includes the 'selectedCategories' as a hard filter
-      const { data, error } = await supabase.functions.invoke("ai-discovery", {
-        body: {
-          queryText: finalQuery,
-          cityId: selectedCity.id,
-          selectedCategories: selectedCategories, // Pass the hard filter
-        },
+      // NOTE: We will create the 'ai-discovery-geo' function in the next step.
+      // For now, this logic will still call the existing function.
+      const functionName = searchNearby ? "ai-discovery-geo" : "ai-discovery";
+      const body = {
+        queryText: finalQuery,
+        cityId: selectedCity?.id,
+        selectedCategories: selectedCategories,
+        ...(searchNearby &&
+          userLocation && {
+            latitude: userLocation.coords.latitude,
+            longitude: userLocation.coords.longitude,
+            radius_km: parseInt(selectedRadius.replace(" KM", "")) || 50, // Default large radius
+          }),
+      };
+
+      const { data, error } = await supabase.functions.invoke(functionName, {
+        body,
       });
 
       if (error) throw error;
@@ -171,8 +219,6 @@ export default function AiDiscoveryScreen() {
         pathname: "/ai-results",
         params: { results: JSON.stringify(data) },
       });
-
-      setAiCredits((prev) => prev - 20);
     } catch (e: any) {
       console.error("Error invoking function:", e);
       setError(e.message || "An unknown error occurred.");
@@ -194,6 +240,8 @@ export default function AiDiscoveryScreen() {
       </SafeAreaView>
     );
   }
+
+  const canGenerate = aiCredits >= 20;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -233,7 +281,7 @@ export default function AiDiscoveryScreen() {
       >
         <View style={styles.header}>
           <Text style={styles.title}>Discovery Assistant</Text>
-          {loadingCredits ? (
+          {loadingInitialData ? (
             <ActivityIndicator />
           ) : (
             <Text style={styles.creditsText}>{aiCredits} AI credits left</Text>
@@ -244,17 +292,63 @@ export default function AiDiscoveryScreen() {
           ref={scrollViewRef}
           contentContainerStyle={styles.scrollContainer}
         >
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>City</Text>
-            <TouchableOpacity
-              style={styles.dropdownButton}
-              onPress={() => setCityModalVisible(true)}
-            >
-              <Text style={styles.dropdownButtonText}>
-                {selectedCity ? selectedCity.name : "Select a City"}
+          <View style={styles.toggleSection}>
+            <View>
+              <Text style={styles.sectionTitle}>Search for places near me</Text>
+              <Text style={styles.toggleSubtitle}>
+                AI will look only for places near you
               </Text>
-            </TouchableOpacity>
+            </View>
+            <Switch
+              trackColor={{ false: "#767577", true: "#81b0ff" }}
+              thumbColor={searchNearby ? "#6366F1" : "#f4f3f4"}
+              onValueChange={() =>
+                setSearchNearby((previousState) => !previousState)
+              }
+              value={searchNearby}
+            />
           </View>
+
+          {searchNearby ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Find places within</Text>
+              <View style={styles.pillsContainer}>
+                {SEARCH_RADII.map((radius) => (
+                  <TouchableOpacity
+                    key={radius}
+                    style={
+                      selectedRadius === radius
+                        ? styles.pillSelected
+                        : styles.pill
+                    }
+                    onPress={() => setSelectedRadius(radius)}
+                  >
+                    <Text
+                      style={
+                        selectedRadius === radius
+                          ? styles.pillTextSelected
+                          : styles.pillText
+                      }
+                    >
+                      {radius}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          ) : (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>City</Text>
+              <TouchableOpacity
+                style={styles.dropdownButton}
+                onPress={() => setCityModalVisible(true)}
+              >
+                <Text style={styles.dropdownButtonText}>
+                  {selectedCity ? selectedCity.name : "Select a City"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Place Type</Text>
@@ -395,17 +489,22 @@ export default function AiDiscoveryScreen() {
           <TouchableOpacity
             style={[
               styles.generateButton,
-              loading && styles.generateButtonDisabled,
+              !canGenerate && styles.generateButtonDisabled,
             ]}
             onPress={handleGenerate}
-            disabled={loading}
+            disabled={!canGenerate || loading}
           >
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.generateButtonText}>Let&rsquo;s Go!</Text>
+              <Text style={styles.generateButtonText}>Let’s Go!</Text>
             )}
           </TouchableOpacity>
+          {!canGenerate && (
+            <Text style={styles.errorText}>
+              You have insufficient credits to generate suggestions.
+            </Text>
+          )}
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -497,7 +596,7 @@ const styles = StyleSheet.create({
   errorText: {
     color: "red",
     textAlign: "center",
-    marginBottom: 16,
+    marginTop: 8,
     paddingHorizontal: 16,
   },
   dropdownButton: {

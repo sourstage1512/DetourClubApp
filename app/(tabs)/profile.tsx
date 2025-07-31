@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Button, Input } from "@rneui/themed";
 import { Session } from "@supabase/supabase-js";
-import * as ImagePicker from "expo-image-picker"; // NEW: Import Image Picker
+import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -14,7 +14,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text, // NEW: Import Image component
+  Text,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -44,65 +44,76 @@ function ProfileDetails({ session }: { session: Session }) {
   const [loading, setLoading] = useState(true);
   const [fullName, setFullName] = useState("");
   const [bio, setBio] = useState("");
-
-  // --- NEW: State for the avatar ---
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null); // This will hold the displayable URL
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [newLocalImage, setNewLocalImage] =
-    useState<ImagePicker.ImagePickerAsset | null>(null); // Holds the new image selected by the user
+    useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [subscriptionStatus, setSubscriptionStatus] = useState("free");
 
+  const [loadingStats, setLoadingStats] = useState(true);
   const [aiCredits, setAiCredits] = useState(0);
   const [listCount, setListCount] = useState(0);
 
   const { user } = session;
 
-  const getProfileAndStats = useCallback(() => {
+  useEffect(() => {
     let ignore = false;
-    async function fetchData() {
+    async function getProfile() {
       setLoading(true);
-
       const { data, error } = await supabase
         .from("profiles")
-        .select(`full_name, bio, avatar_url, ai_credits`)
+        .select(`full_name, bio, avatar_url, subscription_status`)
         .eq("id", user.id)
         .single();
-      if (error) console.warn(error);
+      if (error) console.warn("Error fetching profile:", error);
+
       if (!ignore && data) {
         setFullName(data.full_name || "");
         setBio(data.bio || "");
-        setAiCredits(data.ai_credits || 0);
+        setSubscriptionStatus(data.subscription_status || "free");
 
-        // --- NEW: Fetch the secure, signed URL for the avatar ---
         if (data.avatar_url) {
-          const { data: signedUrlData, error: signedUrlError } =
-            await supabase.storage
-              .from("avatars")
-              .createSignedUrl(data.avatar_url, 3600); // URL valid for 1 hour
-          if (signedUrlError) {
-            console.warn("Error creating signed URL:", signedUrlError);
-          } else {
-            setAvatarUrl(signedUrlData.signedUrl);
-          }
+          const { data: signedUrlData } = await supabase.storage
+            .from("avatars")
+            .createSignedUrl(data.avatar_url, 3600);
+          if (signedUrlData) setAvatarUrl(signedUrlData.signedUrl);
         }
       }
-
-      const { count: listCountData } = await supabase
-        .from("user_lists")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", user.id);
-      if (!ignore && listCountData !== null) setListCount(listCountData);
-
       setLoading(false);
     }
-
-    fetchData();
+    getProfile();
     return () => {
       ignore = true;
     };
   }, [user.id]);
 
-  useFocusEffect(getProfileAndStats);
+  const getStats = useCallback(() => {
+    let ignore = false;
+    async function fetchStats() {
+      setLoadingStats(true);
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select(`ai_credits`)
+        .eq("id", user.id)
+        .single();
+      const { count: listCountData } = await supabase
+        .from("user_lists")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id);
 
-  // --- NEW: Function to handle picking an image from the gallery ---
+      if (!ignore) {
+        if (profileData) setAiCredits(profileData.ai_credits || 0);
+        if (listCountData !== null) setListCount(listCountData);
+      }
+      setLoadingStats(false);
+    }
+    fetchStats();
+    return () => {
+      ignore = true;
+    };
+  }, [user.id]);
+
+  useFocusEffect(getStats);
+
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
@@ -119,7 +130,7 @@ function ProfileDetails({ session }: { session: Session }) {
 
     if (!result.canceled) {
       setNewLocalImage(result.assets[0]);
-      setAvatarUrl(result.assets[0].uri); // Show a preview of the new image immediately
+      setAvatarUrl(result.assets[0].uri);
     }
   };
 
@@ -127,7 +138,6 @@ function ProfileDetails({ session }: { session: Session }) {
     setLoading(true);
     let newAvatarPath: string | undefined = undefined;
 
-    // --- NEW: Upload logic for the new image ---
     if (newLocalImage) {
       const fileExt = newLocalImage.uri.split(".").pop();
       const fileName = `${user.id}.${fileExt}`;
@@ -142,7 +152,7 @@ function ProfileDetails({ session }: { session: Session }) {
 
       const { error: uploadError } = await supabase.storage
         .from("avatars")
-        .upload(filePath, formData, { upsert: true }); // upsert = true allows overwriting
+        .upload(filePath, formData, { upsert: true });
 
       if (uploadError) {
         Alert.alert("Error uploading image:", uploadError.message);
@@ -157,7 +167,7 @@ function ProfileDetails({ session }: { session: Session }) {
       full_name: fullName,
       bio: bio,
       updated_at: new Date(),
-      ...(newAvatarPath && { avatar_url: newAvatarPath }), // Only include avatar_url if a new one was uploaded
+      ...(newAvatarPath && { avatar_url: newAvatarPath }),
     };
 
     const { error } = await supabase.from("profiles").upsert(updates);
@@ -165,11 +175,36 @@ function ProfileDetails({ session }: { session: Session }) {
       Alert.alert(error.message);
     } else {
       Alert.alert("Success", "Profile updated successfully!");
-      setNewLocalImage(null); // Clear the temporary local image
+      setNewLocalImage(null);
       Keyboard.dismiss();
     }
     setLoading(false);
   }
+
+  const handleDeleteAccount = async () => {
+    setLoading(true);
+    try {
+      const { error } = await supabase.functions.invoke("delete-user");
+      if (error) throw error;
+      Alert.alert("Success", "Your account has been deleted.");
+      await supabase.auth.signOut();
+    } catch (e: any) {
+      Alert.alert("Error", e.message || "Could not delete account.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const confirmDelete = () => {
+    Alert.alert(
+      "Delete Account",
+      "Are you sure you want to permanently delete your account and all of your data? This action is irreversible.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: handleDeleteAccount },
+      ]
+    );
+  };
 
   return (
     <KeyboardAvoidingView
@@ -181,7 +216,6 @@ function ProfileDetails({ session }: { session: Session }) {
         keyboardShouldPersistTaps="handled"
       >
         <Pressable onPress={Keyboard.dismiss}>
-          {/* --- NEW: Interactive Profile Header --- */}
           <View style={styles.profileHeader}>
             <TouchableOpacity onPress={pickImage}>
               {avatarUrl ? (
@@ -196,26 +230,32 @@ function ProfileDetails({ session }: { session: Session }) {
                 </View>
               )}
             </TouchableOpacity>
-            <Text style={styles.fullName}>{fullName || "New User"}</Text>
+            <Text style={styles.fullName}>
+              {loading ? "Loading..." : fullName || "New User"}
+            </Text>
             <Text style={styles.email}>{user.email}</Text>
           </View>
 
-          {loading ? (
-            <ActivityIndicator style={{ marginVertical: 20 }} />
-          ) : (
-            <View style={styles.statsContainer}>
+          <View style={styles.statsContainer}>
+            {loadingStats ? (
+              <ActivityIndicator />
+            ) : (
               <StatCard
                 icon="flash-outline"
                 label="AI Credits"
                 value={aiCredits}
               />
+            )}
+            {loadingStats ? (
+              <ActivityIndicator />
+            ) : (
               <StatCard
                 icon="list-outline"
                 label="Lists Created"
                 value={listCount}
               />
-            </View>
-          )}
+            )}
+          </View>
 
           <View style={styles.card}>
             <Text style={styles.cardHeader}>Edit Profile</Text>
@@ -232,7 +272,6 @@ function ProfileDetails({ session }: { session: Session }) {
               placeholder="Tell us about yourself"
               multiline
             />
-            {/* Avatar URL input is now removed */}
             <Button
               title={loading ? "Saving..." : "Update Profile"}
               onPress={updateProfile}
@@ -241,12 +280,45 @@ function ProfileDetails({ session }: { session: Session }) {
             />
           </View>
 
-          <View style={styles.signOutButtonContainer}>
+          <View style={styles.card}>
+            <Text style={styles.cardHeader}>Membership</Text>
+            <View style={styles.membershipInfo}>
+              <Text style={styles.membershipStatus}>
+                {subscriptionStatus.charAt(0).toUpperCase() +
+                  subscriptionStatus.slice(1)}{" "}
+                Member
+              </Text>
+              <Button
+                title="Upgrade to Pro"
+                buttonStyle={styles.upgradeButton}
+                titleStyle={styles.upgradeButtonTitle}
+                onPress={() =>
+                  Alert.alert(
+                    "Coming Soon!",
+                    "Pro features will be available in a future update."
+                  )
+                }
+              />
+            </View>
+          </View>
+
+          <View style={[styles.card, styles.dangerZone]}>
+            <Text style={[styles.cardHeader, styles.dangerZoneHeader]}>
+              Danger Zone
+            </Text>
             <Button
               title="Sign Out"
               onPress={() => supabase.auth.signOut()}
               type="clear"
               titleStyle={styles.signOutTitle}
+              containerStyle={{ marginBottom: 10 }}
+            />
+            <Button
+              title="Delete Account"
+              onPress={confirmDelete}
+              disabled={loading}
+              type="clear"
+              titleStyle={styles.deleteAccountTitle}
             />
           </View>
         </Pressable>
@@ -259,13 +331,10 @@ export default function ProfileScreen() {
   const [session, setSession] = useState<Session | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-    });
-
-    supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => setSession(session));
+    supabase.auth.onAuthStateChange((_event, session) => setSession(session));
   }, []);
 
   return (
@@ -279,23 +348,11 @@ export default function ProfileScreen() {
   );
 }
 
-// --- UPDATED STYLES for Avatar ---
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f0f4f8",
-  },
-  flexContainer: {
-    flex: 1,
-  },
-  scrollContentContainer: {
-    flexGrow: 1,
-    padding: 16,
-  },
-  profileHeader: {
-    alignItems: "center",
-    marginBottom: 24,
-  },
+  container: { flex: 1, backgroundColor: "#f0f4f8" },
+  flexContainer: { flex: 1 },
+  scrollContentContainer: { flexGrow: 1, padding: 16 },
+  profileHeader: { alignItems: "center", marginBottom: 24 },
   avatar: {
     width: 120,
     height: 120,
@@ -312,18 +369,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 16,
   },
-  fullName: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#1f2937",
-  },
-  email: {
-    fontSize: 16,
-    color: "#6b7280",
-  },
+  fullName: { fontSize: 24, fontWeight: "bold", color: "#1f2937" },
+  email: { fontSize: 16, color: "#6b7280" },
   statsContainer: {
     flexDirection: "row",
     justifyContent: "space-around",
+    alignItems: "center",
+    minHeight: 90,
     marginBottom: 24,
     backgroundColor: "white",
     paddingVertical: 16,
@@ -334,20 +386,9 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 2,
   },
-  statCard: {
-    alignItems: "center",
-    flex: 1,
-  },
-  statValue: {
-    fontSize: 22,
-    fontWeight: "bold",
-    color: "#1f2937",
-  },
-  statLabel: {
-    fontSize: 14,
-    color: "#6b7280",
-    marginTop: 4,
-  },
+  statCard: { alignItems: "center", flex: 1 },
+  statValue: { fontSize: 22, fontWeight: "bold", color: "#1f2937" },
+  statLabel: { fontSize: 14, color: "#6b7280", marginTop: 4 },
   card: {
     backgroundColor: "white",
     borderRadius: 12,
@@ -357,6 +398,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 2,
+    marginBottom: 24,
   },
   cardHeader: {
     fontSize: 18,
@@ -364,15 +406,39 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     color: "#1f2937",
   },
-  updateButton: {
-    backgroundColor: "#6366F1",
-    borderRadius: 8,
-  },
-  signOutButtonContainer: {
-    marginTop: 24,
+  updateButton: { backgroundColor: "#6366F1", borderRadius: 8 },
+  membershipInfo: {
+    flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
   },
+  membershipStatus: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#374151",
+  },
+  upgradeButton: {
+    backgroundColor: "#f59e0b",
+    borderRadius: 8,
+  },
+  upgradeButtonTitle: {
+    fontWeight: "bold",
+  },
+  dangerZone: {
+    borderColor: "#ef4444",
+    borderWidth: 1,
+    backgroundColor: "#fff1f2",
+  },
+  dangerZoneHeader: {
+    color: "#ef4444",
+    textAlign: "center",
+  },
   signOutTitle: {
+    color: "#6b7280",
+    fontWeight: "600",
+    fontSize: 16,
+  },
+  deleteAccountTitle: {
     color: "#ef4444",
     fontWeight: "600",
     fontSize: 16,
