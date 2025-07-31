@@ -1,7 +1,17 @@
 import { Button, Input } from "@rneui/themed";
-import { Session } from "@supabase/supabase-js"; // 'User' has been removed
+import { Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
-import { Alert, StyleSheet, Text, View } from "react-native";
+import {
+  Alert,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Auth from "../../components/Auth";
 import { supabase } from "../../lib/supabase";
@@ -12,7 +22,7 @@ function ProfileDetails({ session }: { session: Session }) {
   const [bio, setBio] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
 
-  const { user } = session; // Destructure user from session
+  const { user } = session;
 
   useEffect(() => {
     let ignore = false;
@@ -40,7 +50,7 @@ function ProfileDetails({ session }: { session: Session }) {
     return () => {
       ignore = true;
     };
-  }, [session, user.id]); // Dependency array now includes user.id
+  }, [session, user.id]);
 
   async function updateProfile() {
     setLoading(true);
@@ -57,54 +67,66 @@ function ProfileDetails({ session }: { session: Session }) {
       Alert.alert(error.message);
     } else {
       Alert.alert("Success", "Profile updated successfully!");
+      Keyboard.dismiss(); // Dismiss keyboard on successful update
     }
     setLoading(false);
   }
 
   return (
-    <View style={styles.contentContainer}>
-      <Text style={styles.header}>Your Profile</Text>
+    // --- THIS IS THE NEW LAYOUT STRUCTURE ---
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={styles.flexContainer}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContentContainer}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Pressable onPress={Keyboard.dismiss}>
+          <Text style={styles.header}>Your Profile</Text>
 
-      <View style={styles.inputContainer}>
-        <Input label="Email" value={user.email} disabled />
-        <Input
-          label="Full Name"
-          value={fullName}
-          onChangeText={setFullName}
-          placeholder="Your Name"
-        />
-        <Input
-          label="Bio"
-          value={bio}
-          onChangeText={setBio}
-          placeholder="Tell us about yourself"
-          multiline
-        />
-        <Input
-          label="Avatar URL"
-          value={avatarUrl}
-          onChangeText={setAvatarUrl}
-          placeholder="https://.../your-image.png"
-          autoCapitalize="none"
-        />
-      </View>
+          <View style={styles.inputContainer}>
+            <Input label="Email" value={user.email} disabled />
+            <Input
+              label="Full Name"
+              value={fullName}
+              onChangeText={setFullName}
+              placeholder="Your Name"
+            />
+            <Input
+              label="Bio"
+              value={bio}
+              onChangeText={setBio}
+              placeholder="Tell us about yourself"
+              multiline
+            />
+            <Input
+              label="Avatar URL"
+              value={avatarUrl}
+              onChangeText={setAvatarUrl}
+              placeholder="https://.../your-image.png"
+              autoCapitalize="none"
+            />
+          </View>
 
-      <Button
-        title={loading ? "Saving..." : "Update Profile"}
-        onPress={updateProfile}
-        disabled={loading}
-        buttonStyle={styles.updateButton}
-      />
-      <View style={styles.signOutButtonContainer}>
-        <Button
-          title="Sign Out"
-          onPress={() => supabase.auth.signOut()}
-          type="outline"
-          buttonStyle={styles.signOutButton}
-          titleStyle={styles.signOutTitle}
-        />
-      </View>
-    </View>
+          <Button
+            title={loading ? "Saving..." : "Update Profile"}
+            onPress={updateProfile}
+            disabled={loading}
+            buttonStyle={styles.updateButton}
+          />
+          <View style={styles.signOutButtonContainer}>
+            <Button
+              title="Sign Out"
+              onPress={() => supabase.auth.signOut()}
+              type="outline"
+              buttonStyle={styles.signOutButton}
+              titleStyle={styles.signOutTitle}
+            />
+          </View>
+        </Pressable>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -132,15 +154,21 @@ export default function ProfileScreen() {
   );
 }
 
+// --- UPDATED STYLES ---
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#f8f8f8",
   },
-  contentContainer: {
+  // New styles for the keyboard avoiding view and scroll view
+  flexContainer: {
     flex: 1,
+  },
+  scrollContentContainer: {
+    flexGrow: 1, // Allows content to grow and scroll
     padding: 16,
   },
+  // Renamed from contentContainer for clarity
   header: {
     fontSize: 28,
     fontWeight: "bold",
