@@ -1,7 +1,15 @@
-import { Button, Input } from "@rneui/themed";
+import { Ionicons } from "@expo/vector-icons";
+import { Button, Divider, Input } from "@rneui/themed";
+import * as Linking from "expo-linking"; // NEW: Import expo-linking
 import React from "react";
-import { Alert, StyleSheet, View } from "react-native";
+import { Alert, StyleSheet, Text, View } from "react-native";
 import { supabase } from "../lib/supabase";
+
+// --- NEW: A helper function to create the redirect URL ---
+const createRedirectUrl = () => {
+  // This function creates the correct URL for the current environment (Expo Go, dev build, etc.)
+  return Linking.createURL("");
+};
 
 export default function Auth() {
   const [email, setEmail] = React.useState("");
@@ -30,9 +38,25 @@ export default function Auth() {
     });
 
     if (error) Alert.alert(error.message);
-    if (!session)
+    if (!session && !error)
       Alert.alert("Please check your inbox for email verification!");
     setLoading(false);
+  }
+
+  // --- UPDATED: The function now includes the redirectTo option ---
+  async function signInWithGoogle() {
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: createRedirectUrl(), // This is the crucial fix
+      },
+    });
+
+    if (error) {
+      Alert.alert(error.message);
+      setLoading(false); // Only set loading to false if there's an immediate error
+    }
   }
 
   return (
@@ -72,10 +96,35 @@ export default function Auth() {
           onPress={() => signUpWithEmail()}
         />
       </View>
+
+      <View style={styles.separatorContainer}>
+        <Divider style={styles.divider} />
+        <Text style={styles.separatorText}>OR</Text>
+        <Divider style={styles.divider} />
+      </View>
+
+      <View style={styles.verticallySpaced}>
+        <Button
+          title="Sign in with Google"
+          onPress={() => signInWithGoogle()}
+          disabled={loading}
+          buttonStyle={styles.googleButton}
+          titleStyle={styles.googleButtonTitle}
+          icon={
+            <Ionicons
+              name="logo-google"
+              size={20}
+              color="white"
+              style={{ marginRight: 10 }}
+            />
+          }
+        />
+      </View>
     </View>
   );
 }
 
+// Styles are unchanged
 const styles = StyleSheet.create({
   container: {
     marginTop: 40,
@@ -88,5 +137,26 @@ const styles = StyleSheet.create({
   },
   mt20: {
     marginTop: 20,
+  },
+  separatorContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 20,
+  },
+  divider: {
+    flex: 1,
+    backgroundColor: "#d1d5db",
+  },
+  separatorText: {
+    marginHorizontal: 10,
+    color: "#6b7280",
+    fontWeight: "600",
+  },
+  googleButton: {
+    backgroundColor: "#4285F4",
+  },
+  googleButtonTitle: {
+    color: "white",
+    fontWeight: "bold",
   },
 });
